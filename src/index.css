@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  
+  body {
+    /* Reemplazamos @apply por los valores hexadecimales exactos de Tailwind para evitar conflictos de compilación */
+    background-color: #f9fafb; 
+    color: #111827;
+  }
+}
