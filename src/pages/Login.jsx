@@ -9,14 +9,18 @@ export default function Login() {
   
   const signIn = useAuthStore((state) => state.signIn);
 
-  const handleSubmit = async (e) => {
+const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
       await signIn(email, password);
     } catch (err) {
-      setError('Credenciales incorrectas. Intenta de nuevo.');
+      // LOGUEA EL ERROR REAL EN CONSOLA
+      console.error("Error detallado:", err); 
+      
+      // Ajusta el mensaje según el tipo de error
+      setError(err.message || 'Ocurrió un error al iniciar sesión.');
     } finally {
       setLoading(false);
     }
