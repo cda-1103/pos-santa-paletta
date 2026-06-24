@@ -21,7 +21,7 @@ export default function POS() {
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
   const [receiptSaleId, setReceiptSaleId] = useState(null);
   
-  // ESTADO DEL MENÚ p
+  // ESTADO DEL MENÚ
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const { items, tasaCambio, getTotalUsd, getTotalBs, fetchSettings, addItem, updateQuantity, removeItem } = useCartStore();
@@ -125,42 +125,55 @@ export default function POS() {
       
       <main className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 flex flex-col h-full bg-gray-50">
-          <div className="bg-white px-4 lg:px-6 pt-4 pb-2 border-b border-gray-200 shrink-0 shadow-sm z-10">
-            <input type="text" placeholder="Buscar producto..." className="w-full px-4 py-3 bg-gray-100 border-transparent rounded-xl focus:bg-white focus:border-gray-900 focus:ring-2 focus:ring-gray-900 transition-all mb-4" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+          <div className="bg-white px-3 sm:px-6 pt-4 pb-2 border-b border-gray-200 shrink-0 shadow-sm z-10">
+            <input type="text" placeholder="Buscar producto..." className="w-full px-4 py-2.5 bg-gray-100 border-transparent rounded-xl focus:bg-white focus:border-gray-900 focus:ring-2 focus:ring-gray-900 transition-all mb-3 text-sm" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide no-scrollbar -mx-2 px-2">
-              <button onClick={() => setSelectedCategory('')} className={`whitespace-nowrap px-5 py-2 rounded-full text-sm font-bold transition-all ${selectedCategory === '' ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>Todas</button>
-              {categories.map(cat => <button key={cat.id} onClick={() => setSelectedCategory(cat.id)} className={`whitespace-nowrap px-5 py-2 rounded-full text-sm font-bold transition-all ${selectedCategory === cat.id ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>{cat.nombre}</button>)}
+              <button onClick={() => setSelectedCategory('')} className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all ${selectedCategory === '' ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>Todas</button>
+              {categories.map(cat => <button key={cat.id} onClick={() => setSelectedCategory(cat.id)} className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all ${selectedCategory === cat.id ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>{cat.nombre}</button>)}
             </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4 lg:p-6 pb-24 lg:pb-6">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-6 pb-28 lg:pb-6">
             {filteredProducts.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-400"><span className="text-4xl mb-2">🔍</span><p>No hay productos disponibles.</p></div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 lg:gap-4">
-                {filteredProducts.map(product => (
-                  <div key={product.id} onClick={() => addItem(product)} className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm hover:shadow-md cursor-pointer flex flex-col justify-between h-full active:scale-95 transition-all">
-                    <div>
-                      <div className="flex justify-between items-start mb-1">
-                        <p className="text-xs font-semibold text-gray-400 uppercase">{product.categories?.nombre}</p>
-                        <span className="text-[10px] font-black bg-gray-100 text-gray-700 px-2 py-0.5 rounded-md border border-gray-200">{product.stock_actual} disp.</span>
+              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2 sm:gap-4">
+                {filteredProducts.map(product => {
+                  const currentQty = items.find(i => i.id === product.id)?.cantidad || 0;
+                  const isMaxStock = currentQty >= product.stock_actual;
+
+                  return (
+                    <div 
+                      key={product.id} 
+                      onClick={() => !isMaxStock && addItem(product)} 
+                      className={`bg-white rounded-xl border border-gray-200 p-2.5 sm:p-4 shadow-sm flex flex-col justify-between h-full transition-all group relative ${isMaxStock ? 'opacity-60 grayscale-[20%]' : 'cursor-pointer active:scale-95 hover:shadow-md'}`}
+                    >
+                      <div>
+                        <div className="flex justify-between items-start mb-1.5">
+                          <p className="text-[9px] sm:text-xs font-bold text-gray-400 uppercase truncate pr-1">{product.categories?.nombre}</p>
+                          <span className="flex items-baseline gap-0.5 text-[10px] sm:text-xs font-black bg-gray-100 text-gray-700 px-1.5 sm:px-2 py-0.5 rounded border border-gray-200 whitespace-nowrap">
+                            {product.stock_actual} <span className="text-[8px] font-bold text-gray-500 uppercase">und</span>
+                          </span>
+                        </div>
+                        <h3 className="text-[13px] sm:text-base font-extrabold text-gray-800 leading-tight line-clamp-2">{product.nombre}</h3>
                       </div>
-                      <h3 className="font-bold text-gray-800 leading-tight mb-2">{product.nombre}</h3>
+                      <div className="flex justify-between items-end mt-2 sm:mt-4">
+                        <p className="text-sm sm:text-lg font-black text-gray-900 leading-none">{product.precio_usd.toFixed(2)}$</p>
+                        <div className={`w-7 h-7 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold shadow-sm text-base sm:text-xl leading-none transition-colors ${isMaxStock ? 'bg-gray-200 text-gray-400' : 'bg-gray-900 text-white group-hover:bg-gray-800'}`}>
+                          +
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex justify-between items-end mt-4">
-                      <p className="text-lg font-black text-gray-900">{product.precio_usd.toFixed(2)}$</p>
-                      <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-900 font-bold hover:bg-gray-200">+</div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
 
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 z-20 flex justify-between items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-          <div><p className="text-xs font-semibold text-gray-500 uppercase">Total a cobrar</p><p className="text-xl font-black text-gray-900">{getTotalUsd().toFixed(2)} $</p></div>
-          <button onClick={() => setShowMobileCart(true)} className="bg-gray-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md"><span>Orden</span>{totalItemsEnCarrito > 0 && <span className="bg-white text-gray-900 text-xs py-0.5 px-2 rounded-full font-black">{totalItemsEnCarrito}</span>}</button>
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 sm:p-4 z-20 flex justify-between items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+          <div><p className="text-[10px] font-bold text-gray-500 uppercase">Total a cobrar</p><p className="text-lg font-black text-gray-900">{getTotalUsd().toFixed(2)} $</p></div>
+          <button onClick={() => setShowMobileCart(true)} className="bg-gray-900 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-md text-sm"><span>Orden</span>{totalItemsEnCarrito > 0 && <span className="bg-white text-gray-900 text-[10px] py-0.5 px-1.5 rounded-full font-black">{totalItemsEnCarrito}</span>}</button>
         </div>
 
         <div className={`${showMobileCart ? 'fixed inset-0 z-40 flex' : 'hidden'} lg:static lg:flex w-full lg:w-[420px] bg-white flex-col shadow-[-10px_0_15px_-3px_rgba(0,0,0,0.05)] lg:border-l border-gray-200 transition-all`}>
@@ -174,19 +187,38 @@ export default function POS() {
               <div className="flex flex-col items-center justify-center h-full text-gray-400"><div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-2xl">🛒</div><p className="font-medium">Agrega productos a la orden</p></div>
             ) : (
               <div className="space-y-3">
-                {items.map(item => (
-                  <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center gap-3">
-                    <div className="flex-1 min-w-0"><p className="font-bold text-sm text-gray-900 truncate mb-1">{item.nombre}</p><p className="text-sm font-semibold text-gray-500">{(item.precio_usd * item.cantidad).toFixed(2)}$</p></div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center bg-gray-100 rounded-lg p-1 shrink-0">
-                        <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 bg-white rounded shadow-sm text-gray-800 font-bold">-</button>
-                        <span className="w-8 text-center text-sm font-black">{item.cantidad}</span>
-                        <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 bg-white rounded shadow-sm text-gray-800 font-bold">+</button>
+                {items.map(item => {
+                  const productStock = products.find(p => p.id === item.id)?.stock_actual || 0;
+                  const isMaxStock = item.cantidad >= productStock;
+
+                  return (
+                    <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm text-gray-900 truncate mb-1">{item.nombre}</p>
+                        <p className="text-sm font-semibold text-gray-500">{(item.precio_usd * item.cantidad).toFixed(2)}$</p>
                       </div>
-                      <button onClick={() => removeItem(item.id)} className="w-9 h-9 flex items-center justify-center bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors">🗑</button>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center bg-gray-100 rounded-lg p-1 shrink-0">
+                          <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 bg-white rounded shadow-sm text-gray-800 font-bold active:scale-95">-</button>
+                          
+                          <div className="w-14 flex items-baseline justify-center gap-1">
+                            <span className="text-sm font-black text-gray-900">{item.cantidad}</span>
+                            <span className="text-[10px] font-bold text-gray-500 uppercase">und</span>
+                          </div>
+
+                          <button 
+                            onClick={() => !isMaxStock && updateQuantity(item.id, 1)} 
+                            disabled={isMaxStock}
+                            className={`w-8 h-8 rounded shadow-sm font-bold active:scale-95 transition-colors ${isMaxStock ? 'bg-transparent text-gray-300 shadow-none' : 'bg-white text-gray-800'}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                        <button onClick={() => removeItem(item.id)} className="w-9 h-9 flex items-center justify-center bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors">🗑</button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
