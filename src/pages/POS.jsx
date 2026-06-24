@@ -21,7 +21,7 @@ export default function POS() {
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
   const [receiptSaleId, setReceiptSaleId] = useState(null);
   
-  // ESTADO DEL MENÚ
+  // ESTADO DEL MENÚ p
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const { items, tasaCambio, getTotalUsd, getTotalBs, fetchSettings, addItem, updateQuantity, removeItem } = useCartStore();
