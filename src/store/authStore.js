@@ -26,6 +26,7 @@ export const useAuthStore = create((set) => ({
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     // La sesión se actualizará automáticamente con checkSession
+    await useAuthStore.getState().checkSession();
   },
 
   signOut: async () => {
