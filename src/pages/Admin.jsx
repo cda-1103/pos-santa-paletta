@@ -453,65 +453,108 @@ const fetchSalesRecord = async () => {
       </main>
 
       {/* MODAL: DETALLE DE LA VENTA */}
+{/* MODAL: DETALLE DE LA VENTA (DISEÑO ACTUALIZADO) */}
       {selectedSaleDetails && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-50 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-[#f3f4f6] rounded-[24px] w-full max-w-lg max-h-[95vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             
-            <div className="p-6 bg-white border-b border-gray-200 flex justify-between items-center shrink-0">
-              <h2 className="text-xl font-black text-gray-900 tracking-wide uppercase">Detalle del Pedido</h2>
-              <button onClick={() => setSelectedSaleDetails(null)} className="w-8 h-8 flex items-center justify-center text-gray-500 hover:bg-gray-100 rounded-full font-bold text-xl">×</button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
               {isLoadingDetails ? (
                 <p className="text-center py-10 text-gray-500 font-bold">Cargando detalles...</p>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-                      <h3 className="font-black text-gray-900 text-lg mb-4">Orden {selectedSaleDetails.correlativo || selectedSaleDetails.id.split('-')[0]}</h3>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between"><span className="text-gray-500 font-semibold">Fecha:</span><span className="text-gray-800 font-bold">{new Date(selectedSaleDetails.created_at).toLocaleString('es-VE')}</span></div>
-                        <div className="flex justify-between"><span className="text-gray-500 font-semibold">Realizado por:</span><span className="text-gray-800 font-bold">{selectedSaleDetails.cash_shifts?.profiles?.nombre || 'Administrador'}</span></div>
-                      </div>
+                  {/* Cabecera idéntica a la imagen */}
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h2 className="text-xl font-black text-gray-900 tracking-tight">
+                        Orden #{selectedSaleDetails.correlativo || selectedSaleDetails.id.split('-')[0]} <span className="text-sm font-medium text-gray-800">(Principal)</span>
+                      </h2>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Realizado por {selectedSaleDetails.cash_shifts?.profiles?.nombre || 'Administrador'} .
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-gray-800">
+                        {new Date(selectedSaleDetails.created_at).toLocaleString('es-VE', {
+                          day: '2-digit', month: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+                        })}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-                    <h3 className="font-black text-gray-900 text-lg mb-4">Productos</h3>
-                    <ul className="space-y-3">
+                  {/* Tarjeta: Cliente */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <h3 className="font-bold text-gray-900 text-lg mb-3">Cliente</h3>
+                    <p className="text-center text-gray-700 text-base py-2">No se registró información del cliente.</p>
+                  </div>
+
+                  {/* Tarjeta: Venta */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+                    <h3 className="font-bold text-gray-900 text-lg mb-4">Venta</h3>
+                    
+                    {/* Lista de Productos */}
+                    <div className="space-y-3 mb-6">
                       {selectedSaleDetails.items?.map((item, index) => (
-                        <li key={index} className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
-                          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-gray-900"></span><span className="text-gray-800 font-bold">{item.products?.nombre}</span></div>
-                          <span className="text-gray-900 font-black">{item.cantidad} Und.</span>
-                        </li>
+                        <div key={index} className="flex justify-between items-start text-sm">
+                          <div className="flex items-center gap-2 text-gray-700">
+                            <div className="w-1.5 h-1.5 rounded-full bg-gray-400 mt-1"></div>
+                            <span className="font-semibold">{item.products?.nombre}</span>
+                          </div>
+                          <div className="flex gap-4 text-gray-800 font-semibold min-w-[100px] justify-end">
+                            <span>{item.cantidad} Und.</span>
+                            {/* Si tu tabla sale_items guarda el precio, se mostrará aquí */}
+                            {item.precio_unitario && <span>${(item.precio_unitario * item.cantidad).toFixed(2)}</span>}
+                          </div>
+                        </div>
                       ))}
-                    </ul>
-                  </div>
+                    </div>
 
-                  <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-                    <h3 className="font-black text-gray-900 text-lg mb-4">Totales</h3>
-                    <div className="space-y-2 text-sm font-semibold">
-                      <div className="flex justify-between"><span className="text-gray-600">Total USD:</span><span className="text-gray-900 font-black">${selectedSaleDetails.total_usd.toFixed(2)}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-600">Total BS:</span><span className="text-gray-900">BS {selectedSaleDetails.total_bs.toFixed(2)}</span></div>
+                    {/* Totales */}
+                    <div className="border-t border-gray-100 pt-4 space-y-2 text-sm font-semibold text-gray-600">
+                      <div className="flex justify-between">
+                        <span>Subtotal:</span>
+                        <span>${selectedSaleDetails.total_usd?.toFixed(2) || '0.00'}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-900 font-bold">
+                        <span>Total USD:</span>
+                        <span>${selectedSaleDetails.total_usd?.toFixed(2) || '0.00'}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-900 font-bold">
+                        <span>Total BS:</span>
+                        {/* Se calcula dinámicamente para evitar el error de pantalla en blanco */}
+                        <span>BS {((selectedSaleDetails.total_usd || 0) * (selectedSaleDetails.tasa_cambio_aplicada || 1)).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tasa de Cambio:</span>
+                        <span>{(selectedSaleDetails.tasa_cambio_aplicada || 0).toFixed(2)} Bs./$</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-                      <h3 className="font-black text-gray-900 text-lg mb-4">Métodos de pago</h3>
-                      <div className="space-y-2 text-sm font-semibold">
-                        {selectedSaleDetails.payments?.map((p, i) => (
-                          <div key={i} className="flex justify-between items-center bg-gray-50 p-2 rounded">
-                            <span className="text-gray-800">{p.payment_methods?.nombre}</span>
-                            <span className="text-gray-900 font-black">{p.moneda_pago === 'USD' ? '$' : 'BS'} {p.monto_pagado.toFixed(2)}</span>
-                          </div>
-                        ))}
-                      </div>
+                  {/* Tarjeta: Métodos de pago y vuelto */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm mb-4">
+                    <h3 className="font-bold text-gray-900 text-lg mb-4">Métodos de pago y vuelto</h3>
+                    <div className="space-y-3 text-sm font-bold text-gray-600">
+                      {selectedSaleDetails.payments?.map((p, i) => (
+                        <div key={i} className="flex justify-between items-center border-b border-gray-50 pb-2 last:border-0 last:pb-0">
+                          <span className="capitalize">{p.payment_methods?.nombre}</span>
+                          <span>{p.moneda_pago === 'USD' ? '$' : 'BS'} {p.monto_pagado.toFixed(2)}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </>
               )}
+            </div>
+
+            {/* Botón inferior alineado a la derecha */}
+            <div className="p-5 bg-white border-t border-gray-100 flex justify-end shrink-0">
+              <button 
+                onClick={() => setSelectedSaleDetails(null)} 
+                className="px-8 py-3 bg-[#5024FF] text-white rounded-xl font-bold text-base hover:bg-[#401bcc] transition-colors w-full md:w-auto shadow-sm"
+              >
+                Entendido
+              </button>
             </div>
           </div>
         </div>
