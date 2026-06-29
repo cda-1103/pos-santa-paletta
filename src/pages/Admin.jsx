@@ -32,14 +32,36 @@ export default function Admin() {
   const [filterEndDate, setFilterEndDate] = useState('');
   const [salesSearchQuery, setSalesSearchQuery] = useState('');
 
+  // ESTADOS DEL MÓDULO DE CLIENTES
+  const [clients, setClients] = useState([]);
+  const [clientForm, setClientForm] = useState({ nombre: '', telefono: '' });
+  const [paymentClient, setPaymentClient] = useState(null); 
+  const [clientPaymentForm, setClientPaymentForm] = useState({ monto: '', metodo: 'Efectivo USD', nota: '' });
+  
+  // ESTADOS PARA EL HISTORIAL DEL CLIENTE
+  const [clientHistory, setClientHistory] = useState(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
   useEffect(() => {
     fetchInitialData();
   }, []);
 
   const fetchInitialData = async () => {
     setLoadingData(true);
-    await Promise.all([ fetchSettings(), fetchCatalog(), fetchPaymentMethods(), fetchInventoryHistory(), fetchSalesRecord() ]);
+    await Promise.all([ 
+      fetchSettings(), 
+      fetchCatalog(), 
+      fetchPaymentMethods(), 
+      fetchInventoryHistory(), 
+      fetchSalesRecord(),
+      fetchClients()
+    ]);
     setLoadingData(false);
+  };
+
+  const fetchClients = async () => {
+    const { data } = await supabase.from('clients').select('*').order('nombre');
+    if (data) setClients(data);
   };
 
   const fetchSettings = async () => {
@@ -79,9 +101,7 @@ export default function Admin() {
     if (data) setInventoryHistory(data);
   };
 
-  // SISTEMA DE ALERTAS EN CASO DE ERROR DE BD
-const fetchSalesRecord = async () => {
-    // Especificamos claramente las relaciones evitando el comodín (*)
+  const fetchSalesRecord = async () => {
     const { data, error } = await supabase
       .from('sales')
       .select(`
@@ -91,7 +111,8 @@ const fetchSalesRecord = async () => {
         tasa_cambio_aplicada,
         correlativo,
         cash_shifts!sales_turno_id_fkey(usuario_id, profiles(nombre)),
-        payments:payments_venta_id_fkey(monto_pagado, moneda_pago, referencia, payment_methods(nombre))
+        payments:payments_venta_id_fkey(monto_pagado, moneda_pago, referencia, payment_methods(nombre)),
+        clients(nombre)
       `)
       .order('created_at', { ascending: false });
     
@@ -117,15 +138,130 @@ const fetchSalesRecord = async () => {
     } finally { setIsLoadingDetails(false); }
   };
 
+  // VERSIÓN MEJORADA: DESCUENTA EL CRÉDITO AL ELIMINAR LA VENTA
   const handleDeleteSale = async (saleId) => {
-    if (!window.confirm('⚠️ ¿Estás seguro de eliminar esta venta?\n\nEl dinero se descontará y el stock regresará al inventario.')) return;
+    if (!window.confirm('⚠️ ¿Estás seguro de eliminar esta venta?\n\nEl dinero se descontará, el stock regresará al inventario y se ajustará la deuda del cliente si fue a crédito.')) return;
     try {
+      // 1. Buscamos la venta para saber si tiene un cliente y pagos a crédito asociados
+      const { data: saleToDelete } = await supabase
+        .from('sales')
+        .select('cliente_id, payments(monto_pagado, payment_methods(nombre))')
+        .eq('id', saleId)
+        .single();
+
+      // 2. Si hay cliente y el pago fue a crédito, descontamos esa deuda antes de eliminar
+      if (saleToDelete && saleToDelete.cliente_id) {
+        const creditPayment = saleToDelete.payments?.find(p => p.payment_methods?.nombre?.toLowerCase() === 'crédito');
+        
+        if (creditPayment) {
+          const { data: clientData } = await supabase.from('clients').select('deuda_usd').eq('id', saleToDelete.cliente_id).single();
+          if (clientData) {
+            // Restamos lo que se le sumó en esa venta, asegurando no bajar de 0 por seguridad
+            const newDebt = Math.max(0, clientData.deuda_usd - creditPayment.monto_pagado);
+            await supabase.from('clients').update({ deuda_usd: newDebt }).eq('id', saleToDelete.cliente_id);
+          }
+        }
+      }
+
+      // 3. Procedemos con la eliminación normal
       await supabase.from('payments').delete().eq('venta_id', saleId);
       await supabase.from('sale_items').delete().eq('venta_id', saleId);
       await supabase.from('sales').delete().eq('id', saleId);
-      fetchSalesRecord(); fetchCatalog(); 
+      
+      // Actualizamos todas las vistas
+      fetchSalesRecord(); 
+      fetchCatalog(); 
+      fetchClients();
     } catch (error) {
       alert('Error al eliminar la venta.');
+      console.error(error);
+    }
+  };
+
+  // FUNCIONES DEL MÓDULO DE CLIENTES
+  const handleSaveClient = async (e) => {
+    e.preventDefault();
+    if (!clientForm.nombre) return;
+    setIsSaving(true);
+    try {
+      const { error } = await supabase.from('clients').insert([{ nombre: clientForm.nombre.trim(), telefono: clientForm.telefono.trim() }]);
+      if (error) throw error;
+      setClientForm({ nombre: '', telefono: '' });
+      fetchClients();
+    } catch (error) {
+      alert(`Error al registrar: ${error.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+  
+  const handleProcessClientPayment = async (e) => {
+    e.preventDefault();
+    if (!clientPaymentForm.monto || !paymentClient) return;
+    setIsSaving(true);
+    
+    const monto = parseFloat(clientPaymentForm.monto);
+    const nuevaDeuda = paymentClient.deuda_usd - monto;
+  
+    try {
+      await supabase.from('client_payments').insert([{
+        cliente_id: paymentClient.id,
+        monto_usd: monto,
+        metodo_pago: clientPaymentForm.metodo,
+        nota: clientPaymentForm.nota
+      }]);
+  
+      await supabase.from('clients').update({ deuda_usd: nuevaDeuda }).eq('id', paymentClient.id);
+      
+      setPaymentClient(null);
+      setClientPaymentForm({ monto: '', metodo: 'Efectivo USD', nota: '' });
+      fetchClients();
+      
+      // Si el historial de este cliente estaba abierto, lo refrescamos
+      if (clientHistory && clientHistory.client.id === paymentClient.id) {
+        handleOpenClientHistory(paymentClient);
+      }
+      
+      alert('Abono registrado con éxito');
+    } catch (error) {
+      alert('Error al registrar el abono');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleOpenClientHistory = async (client) => {
+    setClientHistory({ client, sales: [], payments: [] });
+    setIsLoadingHistory(true);
+    try {
+      // 1. Obtener todas las ventas de este cliente que contengan al menos un pago a crédito
+      const { data: salesData } = await supabase
+        .from('sales')
+        .select('id, created_at, correlativo, total_usd, sale_items(cantidad, products(nombre)), payments(monto_pagado, payment_methods(nombre))')
+        .eq('cliente_id', client.id)
+        .order('created_at', { ascending: false });
+
+      // Filtramos en frontend para quedarnos solo con las que usaron Crédito
+      const creditSales = (salesData || []).filter(sale => 
+        sale.payments?.some(p => p.payment_methods?.nombre?.toLowerCase() === 'crédito')
+      ).map(sale => {
+        // Extraemos exactamente qué monto de esa venta fue fiado
+        const creditAmount = sale.payments.find(p => p.payment_methods?.nombre?.toLowerCase() === 'crédito')?.monto_pagado || 0;
+        return { ...sale, creditAmount };
+      });
+
+      // 2. Obtener los abonos
+      const { data: paymentsData } = await supabase
+        .from('client_payments')
+        .select('*')
+        .eq('cliente_id', client.id)
+        .order('created_at', { ascending: false });
+
+      setClientHistory({ client, sales: creditSales, payments: paymentsData || [] });
+    } catch (error) {
+      console.error("Error cargando historial", error);
+    } finally {
+      setIsLoadingHistory(false);
     }
   };
 
@@ -184,7 +320,7 @@ const fetchSalesRecord = async () => {
 
       <div className="bg-white border-b border-gray-200 px-4 lg:px-8 pt-4 pb-0 shrink-0">
         <div className="flex gap-2 overflow-x-auto scrollbar-hide no-scrollbar -mx-2 px-2 pb-4">
-          {['tasas', 'catalogo', 'inventario', 'pagos', 'reportes'].map((tab) => (
+          {['tasas', 'catalogo', 'inventario', 'pagos', 'clientes', 'reportes'].map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab)} className={`whitespace-nowrap px-6 py-2.5 rounded-full text-sm font-bold transition-all capitalize ${activeTab === tab ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>{tab === 'tasas' ? 'Tasa de Cambio' : tab === 'reportes' ? 'Ventas y Reportes' : tab}</button>
           ))}
         </div>
@@ -338,6 +474,88 @@ const fetchSalesRecord = async () => {
              </div>
           )}
 
+          {/* TAB: CLIENTES Y CRÉDITOS */}
+          {activeTab === 'clientes' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
+              <div className="space-y-6">
+                {/* Formulario de Nuevo Cliente */}
+                <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                  <h3 className="font-bold text-gray-900 mb-4">Nuevo Cliente (Crédito)</h3>
+                  <form onSubmit={handleSaveClient} className="space-y-4">
+                    <input type="text" required placeholder="Nombre del cliente o amigo" className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl" value={clientForm.nombre} onChange={(e) => setClientForm({...clientForm, nombre: e.target.value})} />
+                    <input type="text" placeholder="Teléfono (Opcional)" className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl" value={clientForm.telefono} onChange={(e) => setClientForm({...clientForm, telefono: e.target.value})} />
+                    <button type="submit" disabled={isSaving} className="w-full py-3 bg-gray-900 text-white rounded-xl font-bold">Registrar Cliente</button>
+                  </form>
+                </div>
+
+                {/* Formulario de Abono */}
+                {paymentClient && (
+                  <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 shadow-sm animate-in fade-in zoom-in">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="font-bold text-blue-900">Abonar a {paymentClient.nombre}</h3>
+                      <button onClick={() => setPaymentClient(null)} className="text-blue-400 hover:text-blue-600 font-bold text-xl">✕</button>
+                    </div>
+                    <p className="text-sm text-blue-700 mb-4 font-medium">Deuda actual: <span className="font-black">${paymentClient.deuda_usd.toFixed(2)}</span></p>
+                    <form onSubmit={handleProcessClientPayment} className="space-y-3">
+                      <input type="number" step="0.01" max={paymentClient.deuda_usd} required placeholder="Monto a abonar $" className="w-full px-4 py-2 bg-white border border-blue-200 rounded-xl font-bold text-blue-900" value={clientPaymentForm.monto} onChange={(e) => setClientPaymentForm({...clientPaymentForm, monto: e.target.value})} />
+                      
+                      {/* SELECTOR DE MÉTODO DE ABONO ACTUALIZADO */}
+                      <select className="w-full px-4 py-2 bg-white border border-blue-200 rounded-xl" value={clientPaymentForm.metodo} onChange={(e) => setClientPaymentForm({...clientPaymentForm, metodo: e.target.value})}>
+                        <option value="Efectivo USD">Efectivo USD</option>
+                        <option value="Efectivo BS">Efectivo BS</option>
+                        <option value="Pago Móvil">Pago Móvil</option>
+                        <option value="Zelle">Zelle</option>
+                        <option value="Punto">Punto</option>
+                      </select>
+                      
+                      <input type="text" placeholder="Nota de pago (Opcional)" className="w-full px-4 py-2 bg-white border border-blue-200 rounded-xl text-sm" value={clientPaymentForm.nota} onChange={(e) => setClientPaymentForm({...clientPaymentForm, nota: e.target.value})} />
+                      <button type="submit" disabled={isSaving} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-sm transition-colors">Procesar Abono</button>
+                    </form>
+                  </div>
+                )}
+              </div>
+
+              <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
+                <div className="p-6 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                  <h3 className="font-bold text-gray-900">Directorio de Créditos</h3>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-3">
+                  {clients.length === 0 ? <p className="text-center text-gray-400 mt-10">No hay clientes registrados.</p> : (
+                    clients.map(client => (
+                      <div key={client.id} className="p-4 border border-gray-100 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white hover:border-gray-300 transition-colors gap-4">
+                        <div>
+                          <p className="font-bold text-gray-900 text-lg">{client.nombre}</p>
+                          {client.telefono && <p className="text-xs text-gray-400 font-medium">{client.telefono}</p>}
+                          
+                          {/* BOTÓN PARA VER EL HISTORIAL */}
+                          <button 
+                            onClick={() => handleOpenClientHistory(client)}
+                            className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded mt-2 hover:bg-blue-100 transition-colors"
+                          >
+                            👁️ Ver Historial
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                          <div className="text-right">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Saldo Deudor</p>
+                            <p className={`font-black text-lg ${client.deuda_usd > 0 ? 'text-red-600' : 'text-green-500'}`}>
+                              ${(client.deuda_usd || 0).toFixed(2)}
+                            </p>
+                          </div>
+                          {client.deuda_usd > 0 && (
+                            <button onClick={() => setPaymentClient(client)} className="w-10 h-10 flex justify-center items-center bg-gray-900 text-white rounded-xl shadow-sm hover:bg-gray-800 transition-transform active:scale-95">
+                              $
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB: REPORTES DE VENTAS */}
           {activeTab === 'reportes' && (
             <div className="space-y-6">
@@ -406,8 +624,8 @@ const fetchSalesRecord = async () => {
                       <tr className="border-b border-gray-200 text-xs text-gray-800 font-black tracking-wide bg-gray-50">
                         <th className="p-4">Pedido</th>
                         <th className="p-4">Fecha de registro</th>
+                        <th className="p-4">Cliente</th>
                         <th className="p-4">Método de pago</th>
-                        <th className="p-4">Referencia</th>
                         <th className="p-4">Precio USD</th>
                         <th className="p-4">Cajero / Usuario</th>
                         <th className="p-4 text-center">Acciones</th>
@@ -424,6 +642,9 @@ const fetchSalesRecord = async () => {
                               <span className="font-semibold text-gray-800">{new Date(sale.created_at).toLocaleDateString('es-VE')}</span> <br/>
                               <span className="text-xs text-gray-400 font-medium">{new Date(sale.created_at).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' })}</span>
                             </td>
+                            <td className="p-4 font-bold text-gray-700">
+                              {sale.clients?.nombre || '-'}
+                            </td>
                             <td className="p-4">
                               {sale.payments?.map((p, i) => (
                                 <div key={i} className="flex items-center gap-1.5 font-medium text-xs mb-1 bg-gray-100 px-2 py-1 rounded inline-block w-full">
@@ -431,7 +652,6 @@ const fetchSalesRecord = async () => {
                                 </div>
                               ))}
                             </td>
-                            <td className="p-4 font-medium">{sale.payments?.map(p => p.referencia).filter(Boolean).join(', ') || '-'}</td>
                             <td className="p-4 font-black text-gray-900">${sale.total_usd.toFixed(2)}</td>
                             <td className="p-4 font-medium">{sale.cash_shifts?.profiles?.nombre || 'Administrador'}</td>
                             <td className="p-4">
@@ -453,7 +673,6 @@ const fetchSalesRecord = async () => {
       </main>
 
       {/* MODAL: DETALLE DE LA VENTA */}
-{/* MODAL: DETALLE DE LA VENTA (DISEÑO ACTUALIZADO) */}
       {selectedSaleDetails && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[#f3f4f6] rounded-[24px] w-full max-w-lg max-h-[95vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -463,7 +682,6 @@ const fetchSalesRecord = async () => {
                 <p className="text-center py-10 text-gray-500 font-bold">Cargando detalles...</p>
               ) : (
                 <>
-                  {/* Cabecera idéntica a la imagen */}
                   <div className="flex justify-between items-start mb-2">
                     <div>
                       <h2 className="text-xl font-black text-gray-900 tracking-tight">
@@ -482,17 +700,18 @@ const fetchSalesRecord = async () => {
                     </div>
                   </div>
 
-                  {/* Tarjeta: Cliente */}
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
                     <h3 className="font-bold text-gray-900 text-lg mb-3">Cliente</h3>
-                    <p className="text-center text-gray-700 text-base py-2">No se registró información del cliente.</p>
+                    {selectedSaleDetails.clients?.nombre ? (
+                      <p className="text-center text-gray-900 font-bold text-base py-2">{selectedSaleDetails.clients.nombre}</p>
+                    ) : (
+                      <p className="text-center text-gray-700 text-base py-2">No se registró información del cliente.</p>
+                    )}
                   </div>
 
-                  {/* Tarjeta: Venta */}
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
                     <h3 className="font-bold text-gray-900 text-lg mb-4">Venta</h3>
                     
-                    {/* Lista de Productos */}
                     <div className="space-y-3 mb-6">
                       {selectedSaleDetails.items?.map((item, index) => (
                         <div key={index} className="flex justify-between items-start text-sm">
@@ -502,14 +721,12 @@ const fetchSalesRecord = async () => {
                           </div>
                           <div className="flex gap-4 text-gray-800 font-semibold min-w-[100px] justify-end">
                             <span>{item.cantidad} Und.</span>
-                            {/* Si tu tabla sale_items guarda el precio, se mostrará aquí */}
-                            {item.precio_unitario && <span>${(item.precio_unitario * item.cantidad).toFixed(2)}</span>}
+                            {item.precio_unitario_usd && <span>${(item.precio_unitario_usd * item.cantidad).toFixed(2)}</span>}
                           </div>
                         </div>
                       ))}
                     </div>
 
-                    {/* Totales */}
                     <div className="border-t border-gray-100 pt-4 space-y-2 text-sm font-semibold text-gray-600">
                       <div className="flex justify-between">
                         <span>Subtotal:</span>
@@ -521,7 +738,6 @@ const fetchSalesRecord = async () => {
                       </div>
                       <div className="flex justify-between text-gray-900 font-bold">
                         <span>Total BS:</span>
-                        {/* Se calcula dinámicamente para evitar el error de pantalla en blanco */}
                         <span>BS {((selectedSaleDetails.total_usd || 0) * (selectedSaleDetails.tasa_cambio_aplicada || 1)).toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between">
@@ -531,7 +747,6 @@ const fetchSalesRecord = async () => {
                     </div>
                   </div>
 
-                  {/* Tarjeta: Métodos de pago y vuelto */}
                   <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm mb-4">
                     <h3 className="font-bold text-gray-900 text-lg mb-4">Métodos de pago y vuelto</h3>
                     <div className="space-y-3 text-sm font-bold text-gray-600">
@@ -547,7 +762,6 @@ const fetchSalesRecord = async () => {
               )}
             </div>
 
-            {/* Botón inferior alineado a la derecha */}
             <div className="p-5 bg-white border-t border-gray-100 flex justify-end shrink-0">
               <button 
                 onClick={() => setSelectedSaleDetails(null)} 
@@ -555,6 +769,94 @@ const fetchSalesRecord = async () => {
               >
                 Entendido
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIAL DEL CLIENTE */}
+      {clientHistory && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 bg-gray-900 text-white flex justify-between items-center shrink-0">
+              <div>
+                <h2 className="text-2xl font-black">Historial de Cuenta</h2>
+                <p className="text-gray-400 mt-1">{clientHistory.client.nombre}</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="bg-white/10 px-4 py-2 rounded-xl text-right">
+                  <p className="text-[10px] text-gray-300 font-bold uppercase tracking-wider">Deuda Actual</p>
+                  <p className={`text-xl font-black ${clientHistory.client.deuda_usd > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                    ${(clientHistory.client.deuda_usd || 0).toFixed(2)}
+                  </p>
+                </div>
+                <button onClick={() => setClientHistory(null)} className="w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center font-bold transition-colors">✕</button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+              {isLoadingHistory ? (
+                <p className="text-center py-10 text-gray-500 font-bold">Cargando historial...</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  
+                  {/* COLUMNA: COMPRAS A CRÉDITO */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+                    <h3 className="font-bold text-gray-900 border-b border-gray-100 pb-3 mb-4 flex items-center gap-2">
+                      <span className="text-red-500">🛒</span> Deudas Adquiridas
+                    </h3>
+                    <div className="space-y-4">
+                      {clientHistory.sales.length === 0 ? (
+                        <p className="text-sm text-gray-400 italic">No hay compras a crédito registradas.</p>
+                      ) : (
+                        clientHistory.sales.map(sale => (
+                          <div key={sale.id} className="p-3 bg-red-50 rounded-lg border border-red-100">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-sm font-bold text-gray-900">Orden #{sale.correlativo || sale.id.split('-')[0]}</p>
+                                <p className="text-xs text-gray-500">{new Date(sale.created_at).toLocaleString('es-VE')}</p>
+                              </div>
+                              <p className="font-black text-red-600">-${sale.creditAmount.toFixed(2)}</p>
+                            </div>
+                            <div className="border-t border-red-100 pt-2 mt-2">
+                              {sale.sale_items?.map((item, idx) => (
+                                <p key={idx} className="text-xs text-gray-700 flex justify-between">
+                                  <span>• {item.products?.nombre}</span>
+                                  <span className="font-semibold">{item.cantidad} Und.</span>
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* COLUMNA: ABONOS / PAGOS */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+                    <h3 className="font-bold text-gray-900 border-b border-gray-100 pb-3 mb-4 flex items-center gap-2">
+                      <span className="text-green-500">💵</span> Abonos Realizados
+                    </h3>
+                    <div className="space-y-3">
+                      {clientHistory.payments.length === 0 ? (
+                        <p className="text-sm text-gray-400 italic">No hay abonos registrados.</p>
+                      ) : (
+                        clientHistory.payments.map(payment => (
+                          <div key={payment.id} className="p-3 bg-green-50 rounded-lg border border-green-100 flex justify-between items-center">
+                            <div>
+                              <p className="text-sm font-bold text-gray-900">{payment.metodo_pago}</p>
+                              <p className="text-xs text-gray-500">{new Date(payment.created_at).toLocaleString('es-VE')}</p>
+                              {payment.nota && <p className="text-xs text-green-700 italic mt-1">📝 {payment.nota}</p>}
+                            </div>
+                            <p className="font-black text-green-600">+${payment.monto_usd.toFixed(2)}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+              )}
             </div>
           </div>
         </div>

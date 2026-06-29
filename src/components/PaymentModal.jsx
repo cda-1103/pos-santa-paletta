@@ -6,6 +6,8 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
   const { items, tasaCambio, getTotalUsd, clearCart } = useCartStore();
   
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -15,20 +17,21 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
 
   useEffect(() => {
     if (isOpen) {
-      fetchMethods();
+      fetchInitialData();
       setPaymentRows([{ id: Date.now(), methodId: '', amount: '', reference: '' }]);
+      setSelectedClientId('');
     }
   }, [isOpen]);
 
-  const fetchMethods = async () => {
+  const fetchInitialData = async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('payment_methods')
-      .select('*')
-      .eq('activo', true)
-      .order('nombre', { ascending: true });
+    const [methodsRes, clientsRes] = await Promise.all([
+      supabase.from('payment_methods').select('*').eq('activo', true).order('nombre', { ascending: true }),
+      supabase.from('clients').select('*').order('nombre', { ascending: true })
+    ]);
     
-    if (data) setPaymentMethods(data);
+    if (methodsRes.data) setPaymentMethods(methodsRes.data);
+    if (clientsRes.data) setClients(clientsRes.data);
     setLoading(false);
   };
 
@@ -89,22 +92,35 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
     if (validRows.length === 0) return alert('Debes registrar al menos un método de pago válido.');
     if (remainingUsd > 0.01) return alert('El pago está incompleto.');
 
+    // Validar si hay pago a crédito
+    const hasCredit = validRows.some(row => {
+      const method = paymentMethods.find(m => m.id === row.methodId);
+      return method && method.nombre.toLowerCase() === 'crédito';
+    });
+
+    if (hasCredit && !selectedClientId) {
+      return alert('Debes seleccionar un Cliente para poder procesar pagos a Crédito.');
+    }
+
     setIsProcessing(true);
 
     try {
+      // 1. Insertar la venta
       const { data: sale, error: saleError } = await supabase
         .from('sales')
         .insert([{
           turno_id: activeShiftId,
           total_usd: totalUsd,
           tasa_cambio_aplicada: tasaCambio,
-          total_bs: totalBs
+          total_bs: totalBs,
+          cliente_id: selectedClientId || null // Asociamos la venta al cliente si existe
         }])
         .select()
         .single();
 
       if (saleError) throw saleError;
 
+      // 2. Insertar los items
       const saleItemsData = items.map(item => ({
         venta_id: sale.id,
         producto_id: item.id,
@@ -115,6 +131,7 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
       const { error: itemsError } = await supabase.from('sale_items').insert(saleItemsData);
       if (itemsError) throw itemsError;
 
+      // 3. Insertar los pagos
       const paymentsData = validRows.map(row => {
         const method = paymentMethods.find(m => m.id === row.methodId);
         return {
@@ -130,8 +147,23 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
       const { error: payError } = await supabase.from('payments').insert(paymentsData);
       if (payError) throw payError;
 
+      // 4. Si hay crédito, sumar a la deuda del cliente
+      if (hasCredit) {
+        const creditAmount = validRows
+          .filter(r => {
+            const m = paymentMethods.find(x => x.id === r.methodId);
+            return m && m.nombre.toLowerCase() === 'crédito';
+          })
+          .reduce((sum, r) => sum + parseFloat(r.amount), 0);
+
+        const currentClient = clients.find(c => c.id === selectedClientId);
+        if (currentClient && creditAmount > 0) {
+          const newDebt = (currentClient.deuda_usd || 0) + creditAmount;
+          await supabase.from('clients').update({ deuda_usd: newDebt }).eq('id', selectedClientId);
+        }
+      }
+
       clearCart();
-      // Retornamos el id de la venta para poder imprimir el ticket
       onSuccess(sale.id);
       onClose();
 
@@ -158,6 +190,22 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
 
         <div className="flex-1 overflow-y-auto p-6 flex flex-col lg:flex-row gap-8">
           <div className="flex-1 flex flex-col">
+            
+            {/* SELECTOR DE CLIENTE (OPCIONAL) */}
+            <div className="mb-6 bg-blue-50 p-4 rounded-xl border border-blue-100">
+              <label className="block text-sm font-bold text-blue-900 mb-2">Asignar Cliente (Opcional o para Crédito)</label>
+              <select 
+                className="w-full px-4 py-2.5 bg-white border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+              >
+                <option value="">Consumidor Final (Sin Cliente)</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="flex justify-between items-end border-b border-gray-100 pb-2 mb-4">
               <h3 className="font-bold text-gray-800">Métodos de Pago</h3>
             </div>
@@ -165,8 +213,10 @@ export default function PaymentModal({ isOpen, onClose, activeShiftId, onSuccess
               <div className="space-y-3 flex-1 overflow-y-auto pr-2">
                 {paymentRows.map((row) => {
                   const selectedMethod = paymentMethods.find(m => m.id === row.methodId);
+                  const isCreditMethod = selectedMethod?.nombre.toLowerCase() === 'crédito';
+                  
                   return (
-                    <div key={row.id} className="flex flex-wrap sm:flex-nowrap gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200 focus-within:ring-2 focus-within:ring-gray-900 focus-within:border-transparent transition-all">
+                    <div key={row.id} className={`flex flex-wrap sm:flex-nowrap gap-3 p-3 rounded-xl border focus-within:ring-2 focus-within:border-transparent transition-all ${isCreditMethod ? 'bg-orange-50 border-orange-200 focus-within:ring-orange-500' : 'bg-gray-50 border-gray-200 focus-within:ring-gray-900'}`}>
                       <div className="w-full sm:w-1/3">
                         <select className="w-full px-3 py-2 bg-white border border-gray-300 rounded-lg focus:outline-none text-sm font-medium" value={row.methodId} onChange={(e) => updateRow(row.id, 'methodId', e.target.value)}>
                           <option value="">Seleccione...</option>
